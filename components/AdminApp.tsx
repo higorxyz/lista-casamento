@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Gift } from "@/lib/types";
+import { Gift, GiftClaim } from "@/lib/types";
 
 function onlyDigitsWithCountryCode(s: string): string {
   let d = (s || "").replace(/\D/g, "");
@@ -18,6 +18,12 @@ function isValidOptionalUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function parsePositiveInteger(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.floor(parsed));
 }
 
 function normalizeLinksList(values: string[]): string[] {
@@ -58,6 +64,7 @@ export default function AdminApp() {
   const [newLinkInput, setNewLinkInput] = useState("");
   const [newLinks, setNewLinks] = useState<string[]>([]);
   const [newDesc, setNewDesc] = useState("");
+  const [newMaxClaims, setNewMaxClaims] = useState("1");
   const [formError, setFormError] = useState("");
   const [adding, setAdding] = useState(false);
 
@@ -68,9 +75,11 @@ export default function AdminApp() {
   const [editDesc, setEditDesc] = useState("");
   const [editLinkInput, setEditLinkInput] = useState("");
   const [editLinks, setEditLinks] = useState<string[]>([]);
+  const [editMaxClaims, setEditMaxClaims] = useState("1");
   const [editError, setEditError] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
   const [expandedLinkId, setExpandedLinkId] = useState<string | null>(null);
+  const [releaseClaimTarget, setReleaseClaimTarget] = useState<{ gift: Gift; claim: GiftClaim } | null>(null);
 
   async function checkSession() {
     setCheckingSession(true);
@@ -163,19 +172,21 @@ export default function AdminApp() {
       setFormError("Dê um nome ao presente antes de adicionar.");
       return;
     }
+    const maxClaims = parsePositiveInteger(newMaxClaims);
     setFormError("");
     setAdding(true);
     try {
       const res = await fetch("/api/gifts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName, description: newDesc, links: newLinks })
+        body: JSON.stringify({ name: newName, description: newDesc, links: newLinks, maxClaims })
       });
       if (res.ok) {
         setNewName("");
         setNewLinkInput("");
         setNewLinks([]);
         setNewDesc("");
+        setNewMaxClaims("1");
         await loadGifts();
       }
     } finally {
@@ -194,6 +205,17 @@ export default function AdminApp() {
     await loadGifts();
   }
 
+  async function confirmReleaseClaim() {
+    if (!releaseClaimTarget) return;
+    await fetch(`/api/gifts/${releaseClaimTarget.gift.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ releaseClaim: true, guestWhatsapp: releaseClaimTarget.claim.guestWhatsapp })
+    });
+    setReleaseClaimTarget(null);
+    await loadGifts();
+  }
+
   async function confirmDelete() {
     if (!deleteTarget) return;
     await fetch(`/api/gifts/${deleteTarget.id}`, { method: "DELETE" });
@@ -207,6 +229,7 @@ export default function AdminApp() {
     setEditDesc(gift.description);
     setEditLinkInput("");
     setEditLinks([...(gift.links || [])]);
+    setEditMaxClaims(String(gift.maxClaims || 1));
     setEditError("");
   }
 
@@ -216,13 +239,14 @@ export default function AdminApp() {
       setEditError("Dê um nome ao presente antes de salvar.");
       return;
     }
+    const maxClaims = parsePositiveInteger(editMaxClaims);
     setEditError("");
     setSavingEdit(true);
     try {
       const res = await fetch(`/api/gifts/${editTarget.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: editName, description: editDesc, links: editLinks })
+        body: JSON.stringify({ name: editName, description: editDesc, links: editLinks, maxClaims })
       });
 
       if (res.ok) {
@@ -231,6 +255,7 @@ export default function AdminApp() {
         setEditDesc("");
         setEditLinkInput("");
         setEditLinks([]);
+        setEditMaxClaims("1");
         setEditError("");
         await loadGifts();
       }
@@ -294,6 +319,17 @@ export default function AdminApp() {
           <div className="field">
             <label>Descrição / modelo desejado (opcional)</label>
             <textarea placeholder="Ex: Preferência pela marca X, cor inox" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Quantidade de pessoas que podem escolher</label>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              placeholder="1"
+              value={newMaxClaims}
+              onChange={(e) => setNewMaxClaims(e.target.value)}
+            />
           </div>
           <div className="field">
             <label>Links de referência (opcional)</label>
@@ -372,15 +408,40 @@ export default function AdminApp() {
               <div className="admin-item" key={g.id}>
                 <div className="admin-item-main">
                   <div className="name">{g.name}</div>
-                  {g.taken ? (
+                  {g.claims.length > 0 ? (
                     <div className="guest-tag">
-                      Escolhido por <strong>{g.guestName}</strong> ·{" "}
-                      <a href={`https://wa.me/${onlyDigitsWithCountryCode(g.guestWhatsapp)}`} target="_blank" rel="noopener noreferrer">
-                        {g.guestWhatsapp}
-                      </a>
+                      {g.claims.length === 1 ? (
+                        <>
+                          Escolhido por <strong>{g.claims[0].guestName}</strong> ·{" "}
+                          <a href={`https://wa.me/${onlyDigitsWithCountryCode(g.claims[0].guestWhatsapp)}`} target="_blank" rel="noopener noreferrer">
+                            {g.claims[0].guestWhatsapp}
+                          </a>
+                        </>
+                      ) : (
+                        <>
+                          {g.claims.length} pessoas já escolheram · {Math.max(g.maxClaims - g.claims.length, 0)} vaga(s) restante(s)
+                        </>
+                      )}
                     </div>
                   ) : (
-                    <div className="available-tag">Disponível</div>
+                    <div className="available-tag">{g.maxClaims === 1 ? "Disponível" : `Disponível para ${g.maxClaims} pessoas`}</div>
+                  )}
+                  {g.claims.length > 1 && (
+                    <div className="desc" style={{ marginTop: 6, display: "grid", gap: 4 }}>
+                      {g.claims.map((claim, index) => (
+                        <div key={`${claim.guestWhatsapp}-${index}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                          <div>
+                            {index + 1}. <strong>{claim.guestName}</strong> ·{" "}
+                            <a href={`https://wa.me/${onlyDigitsWithCountryCode(claim.guestWhatsapp)}`} target="_blank" rel="noopener noreferrer">
+                              {claim.guestWhatsapp}
+                            </a>
+                          </div>
+                          <button className="btn btn-ghost" onClick={() => setReleaseClaimTarget({ gift: g, claim })}>
+                            Liberar pessoa
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   )}
                   {g.description && <div className="desc">{g.description}</div>}
                   {(g.links || []).length > 0 && (
@@ -421,9 +482,9 @@ export default function AdminApp() {
                   <button className="btn btn-ghost" onClick={() => openEditModal(g)}>
                     Editar
                   </button>
-                  {g.taken && (
+                  {g.claims.length > 0 && (
                     <button className="btn btn-ghost" onClick={() => setReleaseTarget(g)}>
-                      Liberar
+                      Liberar todos
                     </button>
                   )}
                   <button className="btn btn-danger" onClick={() => setDeleteTarget(g)}>
@@ -444,15 +505,37 @@ export default function AdminApp() {
             </button>
             <h3>Liberar este presente?</h3>
             <p className="hint">
-              Isso vai apagar o nome e WhatsApp do convidado que escolheu &ldquo;{releaseTarget.name}&rdquo; e deixar o presente
-              disponível novamente. Use apenas em caso de engano.
+              Isso vai apagar o nome e WhatsApp de todas as pessoas que escolheram &ldquo;{releaseTarget.name}&rdquo; e deixar o
+              presente disponível novamente. Use apenas em caso de engano.
             </p>
             <div className="modal-actions">
               <button className="btn btn-ghost" onClick={() => setReleaseTarget(null)}>
                 Cancelar
               </button>
               <button className="btn btn-danger" onClick={confirmRelease}>
-                Liberar presente
+                Liberar todos
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {releaseClaimTarget && (
+        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setReleaseClaimTarget(null)}>
+          <div className="modal">
+            <button className="close-x" onClick={() => setReleaseClaimTarget(null)}>
+              &times;
+            </button>
+            <h3>Liberar esta pessoa?</h3>
+            <p className="hint">
+              Isso vai remover <strong>{releaseClaimTarget.claim.guestName}</strong> do presente &ldquo;{releaseClaimTarget.gift.name}&rdquo;.
+            </p>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setReleaseClaimTarget(null)}>
+                Cancelar
+              </button>
+              <button className="btn btn-danger" onClick={confirmReleaseClaim}>
+                Liberar pessoa
               </button>
             </div>
           </div>
@@ -490,6 +573,7 @@ export default function AdminApp() {
                 setEditDesc("");
                 setEditLinkInput("");
                 setEditLinks([]);
+                setEditMaxClaims("1");
                 setEditError("");
               }}
             >
@@ -503,6 +587,17 @@ export default function AdminApp() {
             <div className="field">
               <label>Descrição</label>
               <textarea placeholder="Ex: Preferência pela marca X, cor inox" value={editDesc} onChange={(e) => setEditDesc(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Quantidade de pessoas que podem escolher</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                placeholder="1"
+                value={editMaxClaims}
+                onChange={(e) => setEditMaxClaims(e.target.value)}
+              />
             </div>
             <div className="field">
               <label>Links de referência</label>
@@ -572,6 +667,7 @@ export default function AdminApp() {
                   setEditDesc("");
                   setEditLinkInput("");
                   setEditLinks([]);
+                  setEditMaxClaims("1");
                   setEditError("");
                 }}
               >

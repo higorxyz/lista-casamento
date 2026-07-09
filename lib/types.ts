@@ -1,9 +1,17 @@
+export interface GiftClaim {
+  guestName: string;
+  guestWhatsapp: string;
+  claimedAt: number;
+}
+
 export interface Gift {
   id: string;
   name: string;
   description: string;
   link: string;
   links: string[];
+  maxClaims: number;
+  claims: GiftClaim[];
   taken: boolean;
   guestName: string;
   guestWhatsapp: string;
@@ -18,17 +26,22 @@ export interface PublicGift {
   description: string;
   link: string;
   links: string[];
+  maxClaims: number;
+  claimedCount: number;
   taken: boolean;
   addedAt: number;
 }
 
 export function toPublicGift(g: Gift): PublicGift {
+  const claimedCount = g.claims.length;
   return {
     id: g.id,
     name: g.name,
     description: g.description,
     link: g.link,
     links: g.links,
+    maxClaims: g.maxClaims,
+    claimedCount,
     taken: g.taken,
     addedAt: g.addedAt
   };

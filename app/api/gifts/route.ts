@@ -19,6 +19,12 @@ function parseLinksPayload(value: unknown): string[] {
   return [];
 }
 
+function parseMaxClaims(value: unknown, fallback = 1): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.floor(parsed));
+}
+
 export async function GET() {
   const gifts = await getAllGifts();
   const isAdmin = isValidSessionToken(cookies().get(ADMIN_COOKIE)?.value);
@@ -38,7 +44,8 @@ export async function POST(req: NextRequest) {
   const gift = await addGift({
     name: body.name,
     description: typeof body.description === "string" ? body.description : "",
-    links: parseLinksPayload(body.links ?? body.link)
+    links: parseLinksPayload(body.links ?? body.link),
+    maxClaims: parseMaxClaims(body.maxClaims, 1)
   });
   return NextResponse.json({ gift });
 }

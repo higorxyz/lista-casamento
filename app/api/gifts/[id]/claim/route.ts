@@ -19,6 +19,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (result.reason === "not_found") {
       return NextResponse.json({ error: "Esse presente não existe mais na lista." }, { status: 404 });
     }
+    if (result.reason === "already_claimed") {
+      return NextResponse.json({ error: "Você já escolheu este presente." }, { status: 409 });
+    }
     return NextResponse.json({ error: "Esse presente acabou de ser escolhido por outra pessoa." }, { status: 409 });
   }
 

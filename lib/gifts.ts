@@ -1,5 +1,5 @@
 import { Redis } from "@upstash/redis";
-import { Gift } from "./types";
+import { Gift, GiftClaim } from "./types";
 
 const kv = Redis.fromEnv();
 
@@ -9,6 +9,16 @@ const SEED_FLAG_KEY = "gifts:seeded";
 
 function makeId(): string {
   return "gift_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+}
+
+function normalizeMaxClaims(value: unknown): number {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.floor(parsed));
+}
+
+function normalizeWhatsappDigits(value: string): string {
+  return (value || "").replace(/\D/g, "");
 }
 
 function normalizeLinks(input: unknown): string[] {
@@ -26,9 +36,53 @@ function normalizeLinks(input: unknown): string[] {
   return normalized;
 }
 
-function normalizeGift(raw: Partial<Gift> & { links?: unknown; link?: unknown }): Gift {
+function normalizeClaim(input: unknown): GiftClaim | null {
+  if (!input || typeof input !== "object") return null;
+  const claim = input as Partial<GiftClaim>;
+  const guestName = String(claim.guestName || "").trim();
+  const guestWhatsapp = String(claim.guestWhatsapp || "").trim();
+  const claimedAt = typeof claim.claimedAt === "number" ? claim.claimedAt : Date.now();
+  if (!guestName || !guestWhatsapp) return null;
+  return { guestName, guestWhatsapp, claimedAt };
+}
+
+function normalizeClaims(raw: Partial<Gift> & { claims?: unknown }): GiftClaim[] {
+  if (Array.isArray(raw.claims)) {
+    const seen = new Set<string>();
+    const normalized: GiftClaim[] = [];
+    for (const item of raw.claims) {
+      const claim = normalizeClaim(item);
+      if (!claim) continue;
+      const key = normalizeWhatsappDigits(claim.guestWhatsapp) || `${claim.guestName}|${claim.claimedAt}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      normalized.push(claim);
+    }
+    return normalized;
+  }
+
+  const legacyGuestName = String(raw.guestName || "").trim();
+  const legacyGuestWhatsapp = String(raw.guestWhatsapp || "").trim();
+  if (raw.taken && legacyGuestName && legacyGuestWhatsapp) {
+    return [
+      {
+        guestName: legacyGuestName,
+        guestWhatsapp: legacyGuestWhatsapp,
+        claimedAt: typeof raw.claimedAt === "number" ? raw.claimedAt : Date.now()
+      }
+    ];
+  }
+
+  return [];
+}
+
+function normalizeGift(raw: Partial<Gift> & { links?: unknown; link?: unknown; claims?: unknown; maxClaims?: unknown }): Gift {
   const links = normalizeLinks(raw.links ?? raw.link);
   const primaryLink = links[0] || (typeof raw.link === "string" ? raw.link.trim() : "");
+  const claims = normalizeClaims(raw);
+  const maxClaims = normalizeMaxClaims(raw.maxClaims);
+  const taken = claims.length >= maxClaims;
+  const latestClaim = claims[claims.length - 1];
 
   return {
     id: String(raw.id || makeId()),
@@ -36,11 +90,13 @@ function normalizeGift(raw: Partial<Gift> & { links?: unknown; link?: unknown })
     description: String(raw.description || "").trim(),
     link: primaryLink,
     links,
-    taken: Boolean(raw.taken),
-    guestName: String(raw.guestName || "").trim(),
-    guestWhatsapp: String(raw.guestWhatsapp || "").trim(),
+    maxClaims,
+    claims,
+    taken,
+    guestName: latestClaim ? latestClaim.guestName : String(raw.guestName || "").trim(),
+    guestWhatsapp: latestClaim ? latestClaim.guestWhatsapp : String(raw.guestWhatsapp || "").trim(),
     addedAt: typeof raw.addedAt === "number" ? raw.addedAt : Date.now(),
-    claimedAt: typeof raw.claimedAt === "number" ? raw.claimedAt : undefined
+    claimedAt: latestClaim ? latestClaim.claimedAt : typeof raw.claimedAt === "number" ? raw.claimedAt : undefined
   };
 }
 
@@ -53,6 +109,8 @@ function seedGifts(): Gift[] {
       description: "Preferência por um jogo com 5 peças, cor neutra.",
       link: "",
       links: [],
+      maxClaims: 1,
+      claims: [],
       taken: false,
       guestName: "",
       guestWhatsapp: "",
@@ -64,6 +122,8 @@ function seedGifts(): Gift[] {
       description: "Cores claras, de preferência branco ou bege.",
       link: "",
       links: [],
+      maxClaims: 1,
+      claims: [],
       taken: false,
       guestName: "",
       guestWhatsapp: "",
@@ -75,6 +135,8 @@ function seedGifts(): Gift[] {
       description: "Qualquer marca, capacidade a partir de 4 litros.",
       link: "",
       links: [],
+      maxClaims: 1,
+      claims: [],
       taken: false,
       guestName: "",
       guestWhatsapp: "",
@@ -86,6 +148,8 @@ function seedGifts(): Gift[] {
       description: "Contribuição livre para a viagem dos noivos.",
       link: "",
       links: [],
+      maxClaims: 15,
+      claims: [],
       taken: false,
       guestName: "",
       guestWhatsapp: "",
@@ -130,7 +194,7 @@ export async function deleteGift(id: string): Promise<void> {
   await kv.hdel(HASH_KEY, id);
 }
 
-export async function addGift(input: { name: string; description: string; links: string[] }): Promise<Gift> {
+export async function addGift(input: { name: string; description: string; links: string[]; maxClaims: number }): Promise<Gift> {
   const links = normalizeLinks(input.links);
   const gift: Gift = {
     id: makeId(),
@@ -138,6 +202,8 @@ export async function addGift(input: { name: string; description: string; links:
     description: (input.description || "").trim(),
     link: links[0] || "",
     links,
+    maxClaims: normalizeMaxClaims(input.maxClaims),
+    claims: [],
     taken: false,
     guestName: "",
     guestWhatsapp: "",
@@ -151,7 +217,8 @@ export async function updateGift(
   id: string,
   name: string,
   description: string,
-  links: string[]
+  links: string[],
+  maxClaims: number
 ): Promise<Gift | null> {
   const current = await getGift(id);
   if (!current) return null;
@@ -163,7 +230,9 @@ export async function updateGift(
     name: name.trim(),
     description: description.trim(),
     link: normalizedLinks[0] || "",
-    links: normalizedLinks
+    links: normalizedLinks,
+    maxClaims: normalizeMaxClaims(maxClaims),
+    taken: current.claims.length >= normalizeMaxClaims(maxClaims)
   };
 
   await saveGift(updated);
@@ -175,16 +244,30 @@ export async function updateGift(
  * minimize (not fully eliminate) the race window between two guests
  * claiming the same gift at nearly the same moment.
  */
-export async function claimGift(id: string, guestName: string, guestWhatsapp: string): Promise<{ ok: true; gift: Gift } | { ok: false; reason: "not_found" | "already_taken" }> {
+export async function claimGift(
+  id: string,
+  guestName: string,
+  guestWhatsapp: string
+): Promise<{ ok: true; gift: Gift } | { ok: false; reason: "not_found" | "already_taken" | "already_claimed" }> {
   const current = await getGift(id);
   if (!current) return { ok: false, reason: "not_found" };
-  if (current.taken) return { ok: false, reason: "already_taken" };
-  const updated: Gift = {
-    ...current,
-    taken: true,
+  const normalizedWhatsapp = normalizeWhatsappDigits(guestWhatsapp);
+  const alreadyClaimed = current.claims.some((claim) => normalizeWhatsappDigits(claim.guestWhatsapp) === normalizedWhatsapp);
+  if (alreadyClaimed) return { ok: false, reason: "already_claimed" };
+  if (current.claims.length >= current.maxClaims) return { ok: false, reason: "already_taken" };
+  const newClaim: GiftClaim = {
     guestName: guestName.trim(),
     guestWhatsapp: guestWhatsapp.trim(),
     claimedAt: Date.now()
+  };
+  const claims = [...current.claims, newClaim];
+  const updated: Gift = {
+    ...current,
+    claims,
+    taken: claims.length >= current.maxClaims,
+    guestName: newClaim.guestName,
+    guestWhatsapp: newClaim.guestWhatsapp,
+    claimedAt: newClaim.claimedAt
   };
   await saveGift(updated);
   return { ok: true, gift: updated };
@@ -196,10 +279,33 @@ export async function releaseGift(id: string): Promise<Gift | null> {
   const updated: Gift = {
     ...current,
     taken: false,
+    claims: [],
     guestName: "",
     guestWhatsapp: "",
     claimedAt: undefined
   };
+  await saveGift(updated);
+  return updated;
+}
+
+export async function releaseGiftClaim(id: string, guestWhatsapp: string): Promise<Gift | null> {
+  const current = await getGift(id);
+  if (!current) return null;
+
+  const normalizedWhatsapp = normalizeWhatsappDigits(guestWhatsapp);
+  const claims = current.claims.filter((claim) => normalizeWhatsappDigits(claim.guestWhatsapp) !== normalizedWhatsapp);
+  if (claims.length === current.claims.length) return current;
+
+  const latestClaim = claims[claims.length - 1];
+  const updated: Gift = {
+    ...current,
+    claims,
+    taken: claims.length >= current.maxClaims,
+    guestName: latestClaim ? latestClaim.guestName : "",
+    guestWhatsapp: latestClaim ? latestClaim.guestWhatsapp : "",
+    claimedAt: latestClaim ? latestClaim.claimedAt : undefined
+  };
+
   await saveGift(updated);
   return updated;
 }

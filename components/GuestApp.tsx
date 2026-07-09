@@ -17,6 +17,7 @@ export default function GuestApp() {
   const [gifts, setGifts] = useState<PublicGift[] | null>(null);
   const [detailsTarget, setDetailsTarget] = useState<PublicGift | null>(null);
   const [claimTarget, setClaimTarget] = useState<PublicGift | null>(null);
+  const [thankYouTarget, setThankYouTarget] = useState<{ giftName: string; guestName: string } | null>(null);
   const [name, setName] = useState("");
   const [whatsapp, setWhatsapp] = useState("");
   const [error, setError] = useState("");
@@ -104,6 +105,7 @@ export default function GuestApp() {
         return;
       }
       setClaimTarget(null);
+      setThankYouTarget({ giftName: claimTarget.name, guestName: name.trim() });
       await loadGifts();
     } catch (e) {
       console.error(e);
@@ -186,11 +188,18 @@ export default function GuestApp() {
                 )}
                 <div className="card-footer">
                   {g.taken ? (
-                    <div className="status-taken">Alguém já vai dar este presente 💌</div>
+                    <div className="status-taken">Vagas esgotadas para este presente 💌</div>
                   ) : (
-                    <button className="btn btn-primary" onClick={() => openDetails(g)}>
-                      Ver mais informações
-                    </button>
+                    <>
+                      {g.maxClaims > 1 && (
+                        <div className="available-tag" style={{ marginBottom: 8 }}>
+                          {`${g.claimedCount} de ${g.maxClaims} ajudaram`}
+                        </div>
+                      )}
+                      <button className="btn btn-primary" onClick={() => openDetails(g)}>
+                        Ver mais informações
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -215,7 +224,19 @@ export default function GuestApp() {
               <div className="detail-card">
                 <div className="detail-label">Status</div>
                 <div className={`detail-value detail-status ${detailsTarget.taken ? "is-taken" : "is-available"}`}>
-                  {detailsTarget.taken ? "Já escolhido" : "Disponível"}
+                  {detailsTarget.taken ? "Vagas esgotadas" : "Disponível"}
+                </div>
+              </div>
+              <div className="detail-card">
+                <div className="detail-label">Capacidade</div>
+                <div className={`detail-value detail-status ${detailsTarget.taken ? "is-taken" : "is-available"}`}>
+                  {detailsTarget.maxClaims === 1
+                    ? detailsTarget.claimedCount > 0
+                      ? "1 pessoa já escolheu"
+                      : "1 pessoa pode escolher"
+                    : detailsTarget.taken
+                      ? `${detailsTarget.claimedCount} de ${detailsTarget.maxClaims} ajudaram`
+                      : `${detailsTarget.claimedCount} de ${detailsTarget.maxClaims} ajudaram`}
                 </div>
               </div>
             </div>
@@ -237,7 +258,7 @@ export default function GuestApp() {
               </button>
               {!detailsTarget.taken && (
                 <button className="btn btn-primary" onClick={openClaimFromDetails}>
-                  Escolher este presente
+                  {detailsTarget.maxClaims === 1 ? "Escolher este presente" : "Quero ajudar com este presente"}
                 </button>
               )}
             </div>
@@ -268,6 +289,32 @@ export default function GuestApp() {
               </button>
               <button className="btn btn-primary" onClick={confirmClaim} disabled={submitting}>
                 {submitting ? "Confirmando…" : "Confirmar presente"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {thankYouTarget && (
+        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setThankYouTarget(null)}>
+          <div className="modal">
+            <button className="close-x" onClick={() => setThankYouTarget(null)}>
+              &times;
+            </button>
+            <h3>Obrigado por ajudar!</h3>
+            <p className="hint">
+              {thankYouTarget.guestName}, sua escolha de &ldquo;{thankYouTarget.giftName}&rdquo; foi registrada com carinho.
+            </p>
+            <div className="detail-card">
+              <div className="detail-label">Data do casamento</div>
+              <div className="detail-value">19.09.2026</div>
+            </div>
+            <p className="hint" style={{ marginTop: 14 }}>
+              Obrigado por fazer parte desse momento com a gente.
+            </p>
+            <div className="modal-actions">
+              <button className="btn btn-primary" onClick={() => setThankYouTarget(null)}>
+                Voltar para a lista
               </button>
             </div>
           </div>
