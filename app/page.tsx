@@ -12,8 +12,8 @@ export default function HomePage() {
         <p className="subtitle">Lista de presentes</p>
         <div className="divider" />
         <p className="intro">
-          A presença de vocês já é o nosso maior presente. Mas, se quiserem nos ajudar a começar essa nova fase,
-          preparamos esta lista com carinho. Basta escolher um item, avisar que é seu, e deixar o resto com a gente.
+          Sua presença em nosso casamento é o que torna esse momento especial. Se desejar nos presentear, preparamos uma lista com sugestões para facilitar sua escolha. Para evitar presentes repetidos, pedimos que, ao escolher um item, informe seu nome e telefone. Em cada presente, também disponibilizamos um link com uma sugestão de compra. Se preferir enviar o presente diretamente para nossa casa, entre em contato conosco para receber nosso endereço.
+
         </p>
       </div>
 

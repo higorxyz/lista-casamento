@@ -83,6 +83,7 @@ function normalizeGift(raw: Partial<Gift> & { links?: unknown; link?: unknown; c
   const maxClaims = normalizeMaxClaims(raw.maxClaims);
   const taken = claims.length >= maxClaims;
   const latestClaim = claims[claims.length - 1];
+  const addedAt = typeof raw.addedAt === "number" ? raw.addedAt : Date.now();
 
   return {
     id: String(raw.id || makeId()),
@@ -95,8 +96,12 @@ function normalizeGift(raw: Partial<Gift> & { links?: unknown; link?: unknown; c
     taken,
     guestName: latestClaim ? latestClaim.guestName : String(raw.guestName || "").trim(),
     guestWhatsapp: latestClaim ? latestClaim.guestWhatsapp : String(raw.guestWhatsapp || "").trim(),
-    addedAt: typeof raw.addedAt === "number" ? raw.addedAt : Date.now(),
-    claimedAt: latestClaim ? latestClaim.claimedAt : typeof raw.claimedAt === "number" ? raw.claimedAt : undefined
+    addedAt,
+    claimedAt: latestClaim ? latestClaim.claimedAt : typeof raw.claimedAt === "number" ? raw.claimedAt : undefined,
+    // Existing gifts (created before manual ordering existed) fall back to their
+    // addedAt timestamp, preserving today's chronological order until the admin
+    // explicitly reorders them via reorderGifts().
+    order: typeof raw.order === "number" ? raw.order : addedAt
   };
 }
 
@@ -114,7 +119,8 @@ function seedGifts(): Gift[] {
       taken: false,
       guestName: "",
       guestWhatsapp: "",
-      addedAt: now
+      addedAt: now,
+      order: now + 0
     },
     {
       id: makeId(),
@@ -127,7 +133,8 @@ function seedGifts(): Gift[] {
       taken: false,
       guestName: "",
       guestWhatsapp: "",
-      addedAt: now
+      addedAt: now,
+      order: now + 1
     },
     {
       id: makeId(),
@@ -140,7 +147,8 @@ function seedGifts(): Gift[] {
       taken: false,
       guestName: "",
       guestWhatsapp: "",
-      addedAt: now
+      addedAt: now,
+      order: now + 2
     },
     {
       id: makeId(),
@@ -153,7 +161,8 @@ function seedGifts(): Gift[] {
       taken: false,
       guestName: "",
       guestWhatsapp: "",
-      addedAt: now
+      addedAt: now,
+      order: now + 3
     }
   ];
 }
@@ -174,6 +183,7 @@ export async function getAllGifts(): Promise<Gift[]> {
   if (!raw) return [];
   const gifts = Object.values(raw).map((v) => normalizeGift(typeof v === "string" ? (JSON.parse(v) as Gift) : (v as unknown as Gift)));
   return gifts.sort((a, b) => {
+    if (a.order !== b.order) return a.order - b.order;
     if (a.addedAt !== b.addedAt) return a.addedAt - b.addedAt;
     return a.id.localeCompare(b.id);
   });
@@ -196,6 +206,7 @@ export async function deleteGift(id: string): Promise<void> {
 
 export async function addGift(input: { name: string; description: string; links: string[]; maxClaims: number }): Promise<Gift> {
   const links = normalizeLinks(input.links);
+  const now = Date.now();
   const gift: Gift = {
     id: makeId(),
     name: input.name.trim(),
@@ -207,10 +218,55 @@ export async function addGift(input: { name: string; description: string; links:
     taken: false,
     guestName: "",
     guestWhatsapp: "",
-    addedAt: Date.now()
+    addedAt: now,
+    // Date.now() is always greater than the small integer order values assigned
+    // by reorderGifts(), so newly added gifts naturally land at the end of the
+    // list even after the admin has manually reordered everything else.
+    order: now
   };
   await saveGift(gift);
   return gift;
+}
+
+/**
+ * Persists a new manual display order for the gift list, as configured by the
+ * admin (e.g. via drag/drag-like reordering in the admin panel). Any existing
+ * gift ids not present in `orderedIds` are appended at the end, preserving
+ * their previous relative order, so the call is safe even with a stale list.
+ */
+export async function reorderGifts(orderedIds: string[]): Promise<Gift[]> {
+  const raw = await kv.hgetall<Record<string, string>>(HASH_KEY);
+  if (!raw) return [];
+  const gifts = Object.values(raw).map((v) => normalizeGift(typeof v === "string" ? (JSON.parse(v) as Gift) : (v as unknown as Gift)));
+  const byId = new Map(gifts.map((g) => [g.id, g] as const));
+
+  const seen = new Set<string>();
+  const idsInOrder: string[] = [];
+  for (const id of orderedIds) {
+    if (byId.has(id) && !seen.has(id)) {
+      seen.add(id);
+      idsInOrder.push(id);
+    }
+  }
+
+  const remaining = gifts
+    .filter((g) => !seen.has(g.id))
+    .sort((a, b) => (a.order !== b.order ? a.order - b.order : a.addedAt - b.addedAt));
+
+  const finalOrder = [...idsInOrder, ...remaining.map((g) => g.id)];
+
+  const pipeline = kv.pipeline();
+  const updatedGifts: Gift[] = [];
+  finalOrder.forEach((id, index) => {
+    const gift = byId.get(id);
+    if (!gift) return;
+    const updated: Gift = { ...gift, order: index };
+    updatedGifts.push(updated);
+    pipeline.hset(HASH_KEY, { [id]: JSON.stringify(updated) });
+  });
+  await pipeline.exec();
+
+  return updatedGifts;
 }
 
 export async function updateGift(

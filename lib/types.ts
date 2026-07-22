@@ -17,6 +17,7 @@ export interface Gift {
   guestWhatsapp: string;
   addedAt: number;
   claimedAt?: number;
+  order: number;
 }
 
 // Shape returned to guests (never leaks who claimed a gift)
@@ -30,6 +31,7 @@ export interface PublicGift {
   claimedCount: number;
   taken: boolean;
   addedAt: number;
+  order: number;
 }
 
 export function toPublicGift(g: Gift): PublicGift {
@@ -43,6 +45,7 @@ export function toPublicGift(g: Gift): PublicGift {
     maxClaims: g.maxClaims,
     claimedCount,
     taken: g.taken,
-    addedAt: g.addedAt
+    addedAt: g.addedAt,
+    order: g.order
   };
 }

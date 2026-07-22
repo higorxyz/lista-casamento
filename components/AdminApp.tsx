@@ -80,6 +80,7 @@ export default function AdminApp() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [expandedLinkId, setExpandedLinkId] = useState<string | null>(null);
   const [releaseClaimTarget, setReleaseClaimTarget] = useState<{ gift: Gift; claim: GiftClaim } | null>(null);
+  const [reorderingId, setReorderingId] = useState<string | null>(null);
 
   async function checkSession() {
     setCheckingSession(true);
@@ -221,6 +222,34 @@ export default function AdminApp() {
     await fetch(`/api/gifts/${deleteTarget.id}`, { method: "DELETE" });
     setDeleteTarget(null);
     await loadGifts();
+  }
+
+  async function moveGift(index: number, direction: -1 | 1) {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= gifts.length) return;
+
+    const reordered = [...gifts];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+
+    // Optimistic update so the drag/tap feels instant for the noiva.
+    setGifts(reordered);
+    setReorderingId(moved.id);
+    try {
+      const res = await fetch("/api/gifts/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderedIds: reordered.map((g) => g.id) })
+      });
+      if (!res.ok) {
+        // Roll back to the server's source of truth on failure.
+        await loadGifts();
+      }
+    } catch {
+      await loadGifts();
+    } finally {
+      setReorderingId(null);
+    }
   }
 
   function openEditModal(gift: Gift) {
@@ -400,12 +429,38 @@ export default function AdminApp() {
           <div className="section-note">{loadingGifts ? "atualizando…" : `${gifts.length} presente(s) cadastrado(s)`}</div>
         </div>
 
+        {gifts.length > 0 && (
+          <p className="hint" style={{ margin: "-6px 0 14px", fontSize: 12.5, color: "var(--ink-soft)" }}>
+            Use as setas para definir a ordem em que os convidados verão os presentes.
+          </p>
+        )}
+
         {gifts.length === 0 ? (
           <div className="empty">Nenhum presente cadastrado ainda. Adicione o primeiro acima.</div>
         ) : (
           <div className="admin-list">
-            {gifts.map((g) => (
+            {gifts.map((g, index) => (
               <div className="admin-item" key={g.id}>
+                <div className="admin-item-reorder">
+                  <button
+                    type="button"
+                    className="reorder-btn"
+                    onClick={() => moveGift(index, -1)}
+                    disabled={index === 0 || reorderingId !== null}
+                    aria-label={`Mover "${g.name}" para cima`}
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    className="reorder-btn"
+                    onClick={() => moveGift(index, 1)}
+                    disabled={index === gifts.length - 1 || reorderingId !== null}
+                    aria-label={`Mover "${g.name}" para baixo`}
+                  >
+                    ▼
+                  </button>
+                </div>
                 <div className="admin-item-main">
                   <div className="name">{g.name}</div>
                   {g.claims.length > 0 ? (
