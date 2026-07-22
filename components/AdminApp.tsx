@@ -126,7 +126,7 @@ export default function AdminApp() {
   async function loadGifts() {
     setLoadingGifts(true);
     try {
-      const res = await fetch("/api/gifts", { cache: "no-store" });
+      const res = await fetch("/api/gifts?view=admin", { cache: "no-store" });
       const data = await res.json();
       setGifts(data.gifts || []);
     } finally {

@@ -11,6 +11,17 @@ const SITE_PIX_KEY = "marciaematheuscasamento@gmail.com";
 const SITE_PIX_QR_IMAGE = "/pix-lua-de-mel.png";
 const SITE_PIX_RECEIVER_NAME = "Marcia Laryssa Alves da Silva";
 
+// /api/gifts returns a different shape depending on whether the request has
+// a valid admin session cookie: guests get PublicGift (with a ready-made
+// claimedCount), but an admin gets the raw Gift objects (with a `claims`
+// array instead). Since this is the public page, it must never break just
+// because the browser also happens to be logged into /admin — so we
+// normalize defensively instead of trusting `claimedCount` to be present.
+function normalizePublicGift(raw: any): PublicGift {
+  const claimedCount = typeof raw?.claimedCount === "number" ? raw.claimedCount : Array.isArray(raw?.claims) ? raw.claims.length : 0;
+  return { ...raw, claimedCount };
+}
+
 function displayLinkBase(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -58,7 +69,7 @@ export default function GuestApp() {
         fetch("/api/categories", { cache: "no-store" })
       ]);
       const data = await giftsRes.json();
-      setGifts(data.gifts || []);
+      setGifts(Array.isArray(data.gifts) ? data.gifts.map(normalizePublicGift) : []);
       if (categoriesRes.ok) {
         const categoriesData = await categoriesRes.json();
         setCategoryOrder(categoriesData.categories || []);
