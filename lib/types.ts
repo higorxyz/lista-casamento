@@ -18,6 +18,10 @@ export interface Gift {
   addedAt: number;
   claimedAt?: number;
   order: number;
+  category: string;
+  featured: boolean;
+  pixKey: string;
+  qrCodeImage: string;
 }
 
 // Shape returned to guests (never leaks who claimed a gift)
@@ -32,6 +36,10 @@ export interface PublicGift {
   taken: boolean;
   addedAt: number;
   order: number;
+  category: string;
+  featured: boolean;
+  pixKey: string;
+  qrCodeImage: string;
 }
 
 export function toPublicGift(g: Gift): PublicGift {
@@ -46,6 +54,10 @@ export function toPublicGift(g: Gift): PublicGift {
     claimedCount,
     taken: g.taken,
     addedAt: g.addedAt,
-    order: g.order
+    order: g.order,
+    category: g.category,
+    featured: g.featured,
+    pixKey: g.pixKey,
+    qrCodeImage: g.qrCodeImage
   };
 }

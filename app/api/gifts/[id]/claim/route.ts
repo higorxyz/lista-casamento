@@ -1,9 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { claimGift } from "@/lib/gifts";
+import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const ip = getClientIp(req);
+  // 8 claim attempts per 10 minutes per IP is plenty for a real guest (who
+  // claims at most a couple of gifts) while blocking scripted spam-claiming.
+  const rl = await checkRateLimit(`claim:${ip}`, 8, 600);
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Muitas tentativas em pouco tempo. Aguarde alguns minutos e tente novamente." }, { status: 429 });
+  }
+
   const body = await req.json().catch(() => null);
   const name = typeof body?.name === "string" ? body.name.trim() : "";
   const whatsapp = typeof body?.whatsapp === "string" ? body.whatsapp.trim() : "";

@@ -3,6 +3,19 @@
 import { useEffect, useState } from "react";
 import { Gift, GiftClaim } from "@/lib/types";
 
+interface AnalyticsData {
+  totalGifts: number;
+  totalSlots: number;
+  claimedSlots: number;
+  fullyClaimedGifts: number;
+  percentSlotsClaimed: number;
+  categoryCounts: { category: string; count: number }[];
+  pageviews: {
+    totalPageviews: number;
+    last7Days: { date: string; count: number }[];
+  };
+}
+
 function onlyDigitsWithCountryCode(s: string): string {
   let d = (s || "").replace(/\D/g, "");
   if (d && !d.startsWith("55") && d.length <= 11) d = "55" + d;
@@ -65,6 +78,10 @@ export default function AdminApp() {
   const [newLinks, setNewLinks] = useState<string[]>([]);
   const [newDesc, setNewDesc] = useState("");
   const [newMaxClaims, setNewMaxClaims] = useState("1");
+  const [newCategory, setNewCategory] = useState("");
+  const [newFeatured, setNewFeatured] = useState(false);
+  const [newPixKey, setNewPixKey] = useState("");
+  const [newQrCodeImage, setNewQrCodeImage] = useState("");
   const [formError, setFormError] = useState("");
   const [adding, setAdding] = useState(false);
 
@@ -76,11 +93,19 @@ export default function AdminApp() {
   const [editLinkInput, setEditLinkInput] = useState("");
   const [editLinks, setEditLinks] = useState<string[]>([]);
   const [editMaxClaims, setEditMaxClaims] = useState("1");
+  const [editCategory, setEditCategory] = useState("");
+  const [editFeatured, setEditFeatured] = useState(false);
+  const [editPixKey, setEditPixKey] = useState("");
+  const [editQrCodeImage, setEditQrCodeImage] = useState("");
   const [editError, setEditError] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
   const [expandedLinkId, setExpandedLinkId] = useState<string | null>(null);
   const [releaseClaimTarget, setReleaseClaimTarget] = useState<{ gift: Gift; claim: GiftClaim } | null>(null);
   const [reorderingId, setReorderingId] = useState<string | null>(null);
+  const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
+  const [reorderingCategory, setReorderingCategory] = useState(false);
 
   async function checkSession() {
     setCheckingSession(true);
@@ -88,7 +113,11 @@ export default function AdminApp() {
       const res = await fetch("/api/admin/session", { cache: "no-store" });
       const data = await res.json();
       setIsAdmin(!!data.isAdmin);
-      if (data.isAdmin) await loadGifts();
+      if (data.isAdmin) {
+        await loadGifts();
+        await loadCategories();
+        await loadAnalytics();
+      }
     } finally {
       setCheckingSession(false);
     }
@@ -102,6 +131,31 @@ export default function AdminApp() {
       setGifts(data.gifts || []);
     } finally {
       setLoadingGifts(false);
+    }
+  }
+
+  async function loadCategories() {
+    try {
+      const res = await fetch("/api/categories", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setCategoryOrder(data.categories || []);
+      }
+    } catch (e) {
+      console.error("Erro ao carregar categorias:", e);
+    }
+  }
+
+  async function loadAnalytics() {
+    setLoadingAnalytics(true);
+    try {
+      const res = await fetch("/api/analytics", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setAnalytics(data);
+      }
+    } finally {
+      setLoadingAnalytics(false);
     }
   }
 
@@ -120,11 +174,14 @@ export default function AdminApp() {
         body: JSON.stringify({ password })
       });
       if (!res.ok) {
-        setLoginError("Senha incorreta. Tente novamente.");
+        const data = await res.json().catch(() => null);
+        setLoginError(data?.error || "Senha incorreta. Tente novamente.");
         return;
       }
       setIsAdmin(true);
       await loadGifts();
+      await loadCategories();
+      await loadAnalytics();
     } finally {
       setLoggingIn(false);
     }
@@ -180,7 +237,16 @@ export default function AdminApp() {
       const res = await fetch("/api/gifts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName, description: newDesc, links: newLinks, maxClaims })
+        body: JSON.stringify({
+          name: newName,
+          description: newDesc,
+          links: newLinks,
+          maxClaims,
+          category: newCategory,
+          featured: newFeatured,
+          pixKey: newPixKey,
+          qrCodeImage: newQrCodeImage
+        })
       });
       if (res.ok) {
         setNewName("");
@@ -188,7 +254,13 @@ export default function AdminApp() {
         setNewLinks([]);
         setNewDesc("");
         setNewMaxClaims("1");
+        setNewCategory("");
+        setNewFeatured(false);
+        setNewPixKey("");
+        setNewQrCodeImage("");
         await loadGifts();
+        await loadCategories();
+        await loadAnalytics();
       }
     } finally {
       setAdding(false);
@@ -204,6 +276,7 @@ export default function AdminApp() {
     });
     setReleaseTarget(null);
     await loadGifts();
+    await loadAnalytics();
   }
 
   async function confirmReleaseClaim() {
@@ -215,6 +288,7 @@ export default function AdminApp() {
     });
     setReleaseClaimTarget(null);
     await loadGifts();
+    await loadAnalytics();
   }
 
   async function confirmDelete() {
@@ -222,6 +296,7 @@ export default function AdminApp() {
     await fetch(`/api/gifts/${deleteTarget.id}`, { method: "DELETE" });
     setDeleteTarget(null);
     await loadGifts();
+    await loadAnalytics();
   }
 
   async function moveGift(index: number, direction: -1 | 1) {
@@ -252,6 +327,33 @@ export default function AdminApp() {
     }
   }
 
+  async function moveCategory(index: number, direction: -1 | 1, currentOrder: string[]) {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= currentOrder.length) return;
+
+    const reordered = [...currentOrder];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+
+    // Optimistic update so the tap feels instant.
+    setCategoryOrder(reordered);
+    setReorderingCategory(true);
+    try {
+      const res = await fetch("/api/categories/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderedCategories: reordered })
+      });
+      if (!res.ok) {
+        await loadCategories();
+      }
+    } catch {
+      await loadCategories();
+    } finally {
+      setReorderingCategory(false);
+    }
+  }
+
   function openEditModal(gift: Gift) {
     setEditTarget(gift);
     setEditName(gift.name);
@@ -259,6 +361,10 @@ export default function AdminApp() {
     setEditLinkInput("");
     setEditLinks([...(gift.links || [])]);
     setEditMaxClaims(String(gift.maxClaims || 1));
+    setEditCategory(gift.category || "");
+    setEditFeatured(!!gift.featured);
+    setEditPixKey(gift.pixKey || "");
+    setEditQrCodeImage(gift.qrCodeImage || "");
     setEditError("");
   }
 
@@ -275,7 +381,16 @@ export default function AdminApp() {
       const res = await fetch(`/api/gifts/${editTarget.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: editName, description: editDesc, links: editLinks, maxClaims })
+        body: JSON.stringify({
+          name: editName,
+          description: editDesc,
+          links: editLinks,
+          maxClaims,
+          category: editCategory,
+          featured: editFeatured,
+          pixKey: editPixKey,
+          qrCodeImage: editQrCodeImage
+        })
       });
 
       if (res.ok) {
@@ -285,13 +400,27 @@ export default function AdminApp() {
         setEditLinkInput("");
         setEditLinks([]);
         setEditMaxClaims("1");
+        setEditCategory("");
+        setEditFeatured(false);
+        setEditPixKey("");
+        setEditQrCodeImage("");
         setEditError("");
         await loadGifts();
+        await loadCategories();
+        await loadAnalytics();
       }
     } finally {
       setSavingEdit(false);
     }
   }
+
+  // Merges the admin-configured category order with whatever categories
+  // currently exist on gifts, so newly created categories still show up
+  // (appended at the end) even before they've been explicitly reordered.
+  const distinctGiftCategories = Array.from(new Set(gifts.map((g) => g.category).filter(Boolean)));
+  const positionedCategories = categoryOrder.filter((c) => distinctGiftCategories.includes(c));
+  const remainingCategories = distinctGiftCategories.filter((c) => !positionedCategories.includes(c));
+  const displayCategoryOrder = [...positionedCategories, ...remainingCategories];
 
   if (checkingSession) {
     return <div className="loading">Verificando acesso…</div>;
@@ -337,6 +466,78 @@ export default function AdminApp() {
       </div>
 
       <div className="wrap admin-panel">
+        <datalist id="gift-categories">
+          {Array.from(new Set(gifts.map((g) => g.category).filter(Boolean))).map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
+
+        <div className="section-head" style={{ marginTop: 30 }}>
+          <div className="section-title">Visão geral</div>
+          <div className="section-note">{loadingAnalytics ? "atualizando…" : ""}</div>
+        </div>
+
+        {analytics && (
+          <div className="analytics-panel">
+            <div className="stats-grid">
+              <div className="stat-card">
+                <div className="stat-value">{analytics.totalGifts}</div>
+                <div className="stat-label">Presentes cadastrados</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value">{analytics.fullyClaimedGifts}</div>
+                <div className="stat-label">Totalmente escolhidos</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value">{analytics.percentSlotsClaimed}%</div>
+                <div className="stat-label">
+                  Vagas preenchidas ({analytics.claimedSlots}/{analytics.totalSlots})
+                </div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value">{analytics.pageviews.totalPageviews}</div>
+                <div className="stat-label">Visualizações da lista</div>
+              </div>
+            </div>
+
+            {analytics.categoryCounts.length > 0 && (
+              <div className="analytics-subsection">
+                <div className="analytics-subhead">Presentes por categoria</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {analytics.categoryCounts.map((c) => (
+                    <span key={c.category} className="category-chip category-chip-lg">
+                      {c.category} · {c.count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="analytics-subsection">
+              <div className="analytics-subhead">Visualizações nos últimos 7 dias</div>
+              <div className="pageview-bars">
+                {(() => {
+                  const maxCount = Math.max(1, ...analytics.pageviews.last7Days.map((d) => d.count));
+                  return analytics.pageviews.last7Days.map((d) => {
+                    const [, month, day] = d.date.split("-");
+                    return (
+                      <div key={d.date} className="pageview-bar-col" title={`${d.date}: ${d.count} visualização(ões)`}>
+                        <div className="pageview-bar-track">
+                          <div className="pageview-bar" style={{ height: `${Math.max(4, (d.count / maxCount) * 100)}%` }} />
+                        </div>
+                        <div className="pageview-bar-label">
+                          {day}/{month}
+                        </div>
+                        <div className="pageview-bar-count">{d.count}</div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="admin-form" style={{ marginTop: 30 }}>
           <h3>Adicionar novo presente</h3>
           <div className="form-row">
@@ -348,6 +549,48 @@ export default function AdminApp() {
           <div className="field">
             <label>Descrição / modelo desejado (opcional)</label>
             <textarea placeholder="Ex: Preferência pela marca X, cor inox" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Categoria (opcional)</label>
+            <input
+              type="text"
+              list="gift-categories"
+              placeholder="Ex: Cozinha, Casa, Lua de mel"
+              value={newCategory}
+              onChange={(e) => setNewCategory(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input type="checkbox" checked={newFeatured} onChange={(e) => setNewFeatured(e.target.checked)} style={{ width: "auto" }} />
+              Destacar este presente (aparece em posição de destaque, com visual diferenciado)
+            </label>
+          </div>
+          <div className="field">
+            <label>Chave Pix (opcional)</label>
+            <input
+              type="text"
+              placeholder="Ex: email@exemplo.com, CPF ou chave aleatória"
+              value={newPixKey}
+              onChange={(e) => setNewPixKey(e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>URL da imagem do QR Code Pix (opcional)</label>
+            <input
+              type="text"
+              placeholder="Ex: /pix-lua-de-mel.png"
+              value={newQrCodeImage}
+              onChange={(e) => setNewQrCodeImage(e.target.value)}
+            />
+            {newQrCodeImage && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={newQrCodeImage}
+                alt="Pré-visualização do QR Code"
+                style={{ marginTop: 10, width: 120, height: 120, objectFit: "contain", border: "1px solid var(--line)", borderRadius: 4 }}
+              />
+            )}
           </div>
           <div className="field">
             <label>Quantidade de pessoas que podem escolher</label>
@@ -424,6 +667,47 @@ export default function AdminApp() {
           </button>
         </div>
 
+        {displayCategoryOrder.length > 1 && (
+          <>
+            <div className="section-head" style={{ marginTop: 30 }}>
+              <div className="section-title">Ordem das categorias</div>
+              <div className="section-note">{reorderingCategory ? "atualizando…" : ""}</div>
+            </div>
+            <p className="hint" style={{ margin: "-6px 0 14px", fontSize: 12.5, color: "var(--ink-soft)" }}>
+              Use as setas para definir a ordem em que as categorias aparecem para os convidados.
+            </p>
+            <div className="admin-list">
+              {displayCategoryOrder.map((cat, index) => (
+                <div className="admin-item" key={cat}>
+                  <div className="admin-item-reorder">
+                    <button
+                      type="button"
+                      className="reorder-btn"
+                      onClick={() => moveCategory(index, -1, displayCategoryOrder)}
+                      disabled={index === 0 || reorderingCategory}
+                      aria-label={`Mover categoria "${cat}" para cima`}
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      className="reorder-btn"
+                      onClick={() => moveCategory(index, 1, displayCategoryOrder)}
+                      disabled={index === displayCategoryOrder.length - 1 || reorderingCategory}
+                      aria-label={`Mover categoria "${cat}" para baixo`}
+                    >
+                      ▼
+                    </button>
+                  </div>
+                  <div className="admin-item-main">
+                    <div className="name">{cat}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
         <div className="section-head">
           <div className="section-title">Todos os presentes</div>
           <div className="section-note">{loadingGifts ? "atualizando…" : `${gifts.length} presente(s) cadastrado(s)`}</div>
@@ -462,7 +746,11 @@ export default function AdminApp() {
                   </button>
                 </div>
                 <div className="admin-item-main">
-                  <div className="name">{g.name}</div>
+                  <div className="name">
+                    {g.name}
+                    {g.category && <span className="category-chip">{g.category}</span>}
+                    {g.featured && <span className="category-chip category-chip-featured">★ Destaque</span>}
+                  </div>
                   {g.claims.length > 0 ? (
                     <div className="guest-tag">
                       {g.claims.length === 1 ? (
@@ -629,6 +917,10 @@ export default function AdminApp() {
                 setEditLinkInput("");
                 setEditLinks([]);
                 setEditMaxClaims("1");
+                setEditCategory("");
+                setEditFeatured(false);
+                setEditPixKey("");
+                setEditQrCodeImage("");
                 setEditError("");
               }}
             >
@@ -642,6 +934,48 @@ export default function AdminApp() {
             <div className="field">
               <label>Descrição</label>
               <textarea placeholder="Ex: Preferência pela marca X, cor inox" value={editDesc} onChange={(e) => setEditDesc(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Categoria (opcional)</label>
+              <input
+                type="text"
+                list="gift-categories"
+                placeholder="Ex: Cozinha, Casa, Lua de mel"
+                value={editCategory}
+                onChange={(e) => setEditCategory(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={editFeatured} onChange={(e) => setEditFeatured(e.target.checked)} style={{ width: "auto" }} />
+                Destacar este presente (aparece em posição de destaque, com visual diferenciado)
+              </label>
+            </div>
+            <div className="field">
+              <label>Chave Pix (opcional)</label>
+              <input
+                type="text"
+                placeholder="Ex: email@exemplo.com, CPF ou chave aleatória"
+                value={editPixKey}
+                onChange={(e) => setEditPixKey(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label>URL da imagem do QR Code Pix (opcional)</label>
+              <input
+                type="text"
+                placeholder="Ex: /pix-lua-de-mel.png"
+                value={editQrCodeImage}
+                onChange={(e) => setEditQrCodeImage(e.target.value)}
+              />
+              {editQrCodeImage && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={editQrCodeImage}
+                  alt="Pré-visualização do QR Code"
+                  style={{ marginTop: 10, width: 120, height: 120, objectFit: "contain", border: "1px solid var(--line)", borderRadius: 4 }}
+                />
+              )}
             </div>
             <div className="field">
               <label>Quantidade de pessoas que podem escolher</label>
@@ -723,6 +1057,10 @@ export default function AdminApp() {
                   setEditLinkInput("");
                   setEditLinks([]);
                   setEditMaxClaims("1");
+                  setEditCategory("");
+                  setEditFeatured(false);
+                  setEditPixKey("");
+                  setEditQrCodeImage("");
                   setEditError("");
                 }}
               >

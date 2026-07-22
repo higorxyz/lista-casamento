@@ -62,7 +62,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     links: parsedLinks.length ? parsedLinks : current.links,
     link: parsedLinks.length ? parsedLinks[0] : current.link,
     maxClaims: body.maxClaims !== undefined ? parseMaxClaims(body.maxClaims, current.maxClaims) : current.maxClaims,
-    taken: current.claims.length >= (body.maxClaims !== undefined ? parseMaxClaims(body.maxClaims, current.maxClaims) : current.maxClaims)
+    taken: current.claims.length >= (body.maxClaims !== undefined ? parseMaxClaims(body.maxClaims, current.maxClaims) : current.maxClaims),
+    category: typeof body.category === "string" ? body.category.trim() : current.category,
+    featured: typeof body.featured === "boolean" ? body.featured : current.featured,
+    pixKey: typeof body.pixKey === "string" ? body.pixKey.trim() : current.pixKey,
+    qrCodeImage: typeof body.qrCodeImage === "string" ? body.qrCodeImage.trim() : current.qrCodeImage
   };
   await saveGift(updated);
   return NextResponse.json({ gift: updated });
@@ -78,12 +82,16 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   const description = typeof body.description === "string" ? body.description : "";
   const links = parseLinksPayload(body.links ?? body.link);
   const maxClaims = parseMaxClaims(body.maxClaims, 1);
+  const category = typeof body.category === "string" ? body.category : "";
+  const featured = typeof body.featured === "boolean" ? body.featured : undefined;
+  const pixKey = typeof body.pixKey === "string" ? body.pixKey : "";
+  const qrCodeImage = typeof body.qrCodeImage === "string" ? body.qrCodeImage : "";
 
   if (!name) {
     return NextResponse.json({ error: "Nome obrigatório." }, { status: 400 });
   }
 
-  const updated = await updateGift(params.id, name, description, links, maxClaims);
+  const updated = await updateGift(params.id, name, description, links, maxClaims, category, featured, pixKey, qrCodeImage);
   if (!updated) return NextResponse.json({ error: "Presente não encontrado." }, { status: 404 });
 
   return NextResponse.json({ success: true });

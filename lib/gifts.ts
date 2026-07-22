@@ -6,6 +6,9 @@ const kv = Redis.fromEnv();
 // All gifts are stored as a single Redis hash: field = gift id, value = JSON string.
 const HASH_KEY = "gifts";
 const SEED_FLAG_KEY = "gifts:seeded";
+// Admin-configured display order for categories, stored as a JSON array of
+// category names (e.g. ["Cozinha", "Casa", "Lua de mel"]).
+const CATEGORY_ORDER_KEY = "category_order";
 
 function makeId(): string {
   return "gift_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
@@ -19,6 +22,22 @@ function normalizeMaxClaims(value: unknown): number {
 
 function normalizeWhatsappDigits(value: string): string {
   return (value || "").replace(/\D/g, "");
+}
+
+function normalizeCategory(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizePixKey(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeQrCodeImage(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeFeatured(value: unknown): boolean {
+  return value === true || value === "true";
 }
 
 function normalizeLinks(input: unknown): string[] {
@@ -101,7 +120,11 @@ function normalizeGift(raw: Partial<Gift> & { links?: unknown; link?: unknown; c
     // Existing gifts (created before manual ordering existed) fall back to their
     // addedAt timestamp, preserving today's chronological order until the admin
     // explicitly reorders them via reorderGifts().
-    order: typeof raw.order === "number" ? raw.order : addedAt
+    order: typeof raw.order === "number" ? raw.order : addedAt,
+    category: normalizeCategory((raw as Partial<Gift>).category),
+    featured: normalizeFeatured((raw as Partial<Gift>).featured),
+    pixKey: normalizePixKey((raw as Partial<Gift>).pixKey),
+    qrCodeImage: normalizeQrCodeImage((raw as Partial<Gift>).qrCodeImage)
   };
 }
 
@@ -120,7 +143,11 @@ function seedGifts(): Gift[] {
       guestName: "",
       guestWhatsapp: "",
       addedAt: now,
-      order: now + 0
+      order: now + 0,
+      category: "Cozinha",
+      featured: false,
+      pixKey: "",
+      qrCodeImage: ""
     },
     {
       id: makeId(),
@@ -134,7 +161,11 @@ function seedGifts(): Gift[] {
       guestName: "",
       guestWhatsapp: "",
       addedAt: now,
-      order: now + 1
+      order: now + 1,
+      category: "Casa",
+      featured: false,
+      pixKey: "",
+      qrCodeImage: ""
     },
     {
       id: makeId(),
@@ -148,7 +179,11 @@ function seedGifts(): Gift[] {
       guestName: "",
       guestWhatsapp: "",
       addedAt: now,
-      order: now + 2
+      order: now + 2,
+      category: "Cozinha",
+      featured: false,
+      pixKey: "",
+      qrCodeImage: ""
     },
     {
       id: makeId(),
@@ -162,7 +197,11 @@ function seedGifts(): Gift[] {
       guestName: "",
       guestWhatsapp: "",
       addedAt: now,
-      order: now + 3
+      order: now + 3,
+      category: "Lua de mel",
+      featured: true,
+      pixKey: "marciaematheuscasamento@gmail.com",
+      qrCodeImage: "/pix-lua-de-mel.png"
     }
   ];
 }
@@ -204,7 +243,16 @@ export async function deleteGift(id: string): Promise<void> {
   await kv.hdel(HASH_KEY, id);
 }
 
-export async function addGift(input: { name: string; description: string; links: string[]; maxClaims: number }): Promise<Gift> {
+export async function addGift(input: {
+  name: string;
+  description: string;
+  links: string[];
+  maxClaims: number;
+  category?: string;
+  featured?: boolean;
+  pixKey?: string;
+  qrCodeImage?: string;
+}): Promise<Gift> {
   const links = normalizeLinks(input.links);
   const now = Date.now();
   const gift: Gift = {
@@ -222,7 +270,11 @@ export async function addGift(input: { name: string; description: string; links:
     // Date.now() is always greater than the small integer order values assigned
     // by reorderGifts(), so newly added gifts naturally land at the end of the
     // list even after the admin has manually reordered everything else.
-    order: now
+    order: now,
+    category: normalizeCategory(input.category),
+    featured: normalizeFeatured(input.featured),
+    pixKey: normalizePixKey(input.pixKey),
+    qrCodeImage: normalizeQrCodeImage(input.qrCodeImage)
   };
   await saveGift(gift);
   return gift;
@@ -274,7 +326,11 @@ export async function updateGift(
   name: string,
   description: string,
   links: string[],
-  maxClaims: number
+  maxClaims: number,
+  category?: string,
+  featured?: boolean,
+  pixKey?: string,
+  qrCodeImage?: string
 ): Promise<Gift | null> {
   const current = await getGift(id);
   if (!current) return null;
@@ -288,7 +344,11 @@ export async function updateGift(
     link: normalizedLinks[0] || "",
     links: normalizedLinks,
     maxClaims: normalizeMaxClaims(maxClaims),
-    taken: current.claims.length >= normalizeMaxClaims(maxClaims)
+    taken: current.claims.length >= normalizeMaxClaims(maxClaims),
+    category: category !== undefined ? normalizeCategory(category) : current.category,
+    featured: featured !== undefined ? normalizeFeatured(featured) : current.featured,
+    pixKey: pixKey !== undefined ? normalizePixKey(pixKey) : current.pixKey,
+    qrCodeImage: qrCodeImage !== undefined ? normalizeQrCodeImage(qrCodeImage) : current.qrCodeImage
   };
 
   await saveGift(updated);
@@ -342,6 +402,47 @@ export async function releaseGift(id: string): Promise<Gift | null> {
   };
   await saveGift(updated);
   return updated;
+}
+
+/**
+ * Returns the admin-configured display order for categories. Only category
+ * names explicitly placed by an admin (via saveCategoryOrder) live here —
+ * use sortCategories() to merge this with whatever categories actually exist
+ * on gifts right now.
+ */
+export async function getCategoryOrder(): Promise<string[]> {
+  const raw = await kv.get<string[] | string>(CATEGORY_ORDER_KEY);
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter((c): c is string => typeof c === "string");
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((c): c is string => typeof c === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Persists a new manual display order for categories, as configured by the
+ * admin (e.g. via arrow-based reordering in the admin panel).
+ */
+export async function saveCategoryOrder(order: string[]): Promise<string[]> {
+  const cleaned = Array.from(new Set(order.map((c) => c.trim()).filter(Boolean)));
+  await kv.set(CATEGORY_ORDER_KEY, JSON.stringify(cleaned));
+  return cleaned;
+}
+
+/**
+ * Orders a list of category names (typically the distinct categories found
+ * among current gifts) according to the admin-configured order. Categories
+ * that exist but haven't been explicitly placed yet are appended at the end,
+ * in order of first appearance, so new categories don't get lost.
+ */
+export function sortCategories(categories: string[], order: string[]): string[] {
+  const distinct = Array.from(new Set(categories.map((c) => c.trim()).filter(Boolean)));
+  const positioned = order.filter((c) => distinct.includes(c));
+  const remaining = distinct.filter((c) => !positioned.includes(c));
+  return [...positioned, ...remaining];
 }
 
 export async function releaseGiftClaim(id: string, guestWhatsapp: string): Promise<Gift | null> {

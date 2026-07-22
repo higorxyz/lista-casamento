@@ -45,7 +45,11 @@ export async function POST(req: NextRequest) {
     name: body.name,
     description: typeof body.description === "string" ? body.description : "",
     links: parseLinksPayload(body.links ?? body.link),
-    maxClaims: parseMaxClaims(body.maxClaims, 1)
+    maxClaims: parseMaxClaims(body.maxClaims, 1),
+    category: typeof body.category === "string" ? body.category : "",
+    featured: body.featured === true,
+    pixKey: typeof body.pixKey === "string" ? body.pixKey : "",
+    qrCodeImage: typeof body.qrCodeImage === "string" ? body.qrCodeImage : ""
   });
   return NextResponse.json({ gift });
 }
